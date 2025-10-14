@@ -1,7 +1,29 @@
 import numpy as np
 from sklearn import datasets, linear_model
 import matplotlib.pyplot as plt
-from three_layer_neural_network import NeuralNetwork, generate_data, plot_decision_boundary
+from three_layer_neural_network import NeuralNetwork, generate_data
+from sklearn.datasets import load_breast_cancer
+from sklearn.model_selection import train_test_split
+from sklearn.preprocessing import StandardScaler
+from sklearn.metrics import accuracy_score, confusion_matrix
+
+
+def generate_cancer_data():
+    '''
+    generate data
+    :return: X: input data, y: given labels
+    '''
+    # Scikit-learn 8.1.6. Breast cancer Wisconsin (diagnostic) dataset
+    cancer = datasets.load_breast_cancer()
+    X, y = cancer.data, cancer.target
+    
+    X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
+    
+    scaler = StandardScaler()
+    X_train = scaler.fit_transform(X_train)
+    X_test = scaler.transform(X_test)
+    
+    return X.shape[1], X_train, X_test, y_train, y_test
 
 class DeepNeuralNetwork(NeuralNetwork):
     """
@@ -51,7 +73,10 @@ class DeepNeuralNetwork(NeuralNetwork):
             z = a_prev.dot(W) + b
             
             if i == self.num_layers - 1:
-                exp_scores = np.exp(z)
+                # Numerical stable softmax: subtract max to prevent overflow
+                # refer to https://blester125.com/blog/softmax.html
+                z_max = np.max(z, axis=1, keepdims=True)
+                exp_scores = np.exp(z - z_max)
                 a = exp_scores / np.sum(exp_scores, axis=1, keepdims=True)
             else:
                 a = actFun(z)
@@ -176,10 +201,79 @@ class DeepNeuralNetwork(NeuralNetwork):
         plt.savefig(filename, dpi=300, bbox_inches='tight')
         plt.close()
 
+def train_moon(X, y, layer_dims, actFun_type='relu', reg_lambda=0.01, seed=0, 
+                   epochs=20000, epsilon=0.01, print_loss=True, filename='output.png'):
+    '''
+    Train a deep neural network and save the decision boundary plot
+    :param X: input data
+    :param y: given labels
+    :param layer_dims: list defining the network structure
+    :param actFun_type: activation function type
+    :param reg_lambda: regularization coefficient
+    :param seed: random seed
+    :param epochs: number of training iterations
+    :param epsilon: learning rate
+    :param print_loss: whether to print loss during training
+    :param filename: output filename for the decision boundary plot
+    :return:
+    '''
+    model = DeepNeuralNetwork(
+        layer_dims=layer_dims,
+        actFun_type=actFun_type,
+        reg_lambda=reg_lambda,
+        seed=seed
+    )
+    model.fit_model(X, y, epochs=epochs, epsilon=epsilon, print_loss=print_loss)
+    model.save_decision_boundary(X, y, filename=filename)
+    return
+
+def train_cancer(X_train, y_train, X_test, y_test, layer_dims, 
+                      actFun_type='tanh', reg_lambda=0.01, seed=0,
+                      epochs=20000, epsilon=0.01, print_loss=True, name='model'):
+    '''
+    Train a deep neural network and evaluate on test set
+    :param X_train: training data
+    :param y_train: training labels
+    :param X_test: test data
+    :param y_test: test labels
+    :param layer_dims: list defining the network structure
+    :param actFun_type: activation function type
+    :param reg_lambda: regularization coefficient
+    :param seed: random seed
+    :param epochs: number of training iterations
+    :param epsilon: learning rate
+    :param print_loss: whether to print loss during training
+    :param name: name of the experiment for printing
+    :return:
+    '''
+    model = DeepNeuralNetwork(
+        layer_dims=layer_dims,
+        actFun_type=actFun_type,
+        reg_lambda=reg_lambda,
+        seed=seed
+    )
+    model.fit_model(X_train, y_train, epochs=epochs, epsilon=epsilon, print_loss=print_loss)
+    y_pred = model.predict(X_test)
+    
+    result_text = f"\n{name}\n"
+    result_text += f"Confusion matrix:\n{confusion_matrix(y_test, y_pred)}\n"
+    result_text += f"Accuracy: {accuracy_score(y_test, y_pred):.4f}\n"
+    
+    print(result_text)
+    # Append to file
+    with open("cancer_results.txt", 'a') as f:
+        f.write(result_text)
+    
+    return
+
 def main():
     '''
     generate data, build model, train and visualize results
     '''
+    # ##########################################################
+    # Make-Moons dataset
+    # ##########################################################
+    
     # Generate Make-Moons dataset
     X, y = generate_data()
     
@@ -188,90 +282,123 @@ def main():
     # Example: [2, 10, 10, 2]: 2 input nodes, 2 hidden layers with 10 nodes each, 2 output nodes
     
     # baseline
-    model = DeepNeuralNetwork(
-        layer_dims=[2, 10, 10, 2],
+    train_moon(
+        X, y, 
+        [2, 10, 10, 2], 
         actFun_type='relu',
-        reg_lambda=0.01,
-        seed=0
+        filename='n_layers_images/2x10_relu.png'
     )
-    model.fit_model(X, y, epochs=20000, epsilon=0.01, print_loss=True)
-    model.save_decision_boundary(X, y, filename='2x20_relu.png')
     
-    # Experiment 1 - act fun
-    model = DeepNeuralNetwork(
-        layer_dims=[2, 10, 10, 2],
-        actFun_type='tanh',
-        reg_lambda=0.01,
-        seed=0
+    # Experiment 1 - act func
+    train_moon(
+        X, y, 
+        [2, 10, 10, 2], 
+        actFun_type='tanh', 
+        filename='n_layers_images/2x10_tanh.png'
     )
-    model.fit_model(X, y, epochs=20000, epsilon=0.01, print_loss=True)
-    model.save_decision_boundary(X, y, filename='2x20_tanh.png')
-
-    model = DeepNeuralNetwork(
-        layer_dims=[2, 10, 10, 2],
-        actFun_type='sigmoid',
-        reg_lambda=0.01,
-        seed=0
-    )
-    model.fit_model(X, y, epochs=20000, epsilon=0.01, print_loss=True)
-    model.save_decision_boundary(X, y, filename='2x20_sigmoid.png')
+    train_moon(
+        X, y, 
+        [2, 10, 10, 2], 
+        actFun_type='sigmoid', 
+        filename='n_layers_images/2x10_sigmoid.png')
     
     # Experiment 2 - deep / shallow
-    model = DeepNeuralNetwork(
-        layer_dims=[2, 50, 2],
-        actFun_type='relu',
-        reg_lambda=0.01,
-        seed=0
-    )
-    model.fit_model(X, y, epochs=20000, epsilon=0.01, print_loss=True)
-    model.save_decision_boundary(X, y, filename='1x50_relu.png')
-    
-    model = DeepNeuralNetwork(
-        layer_dims=[2, 8, 8, 8, 2],
-        actFun_type='relu',
-        reg_lambda=0.01,
-        seed=0
-    )
-    model.fit_model(X, y, epochs=20000, epsilon=0.01, print_loss=True)
-    model.save_decision_boundary(X, y, filename='3x8_relu.png')
+    train_moon(
+        X, y, 
+        [2, 50, 2], 
+        filename='n_layers_images/1x50_relu.png')
+    train_moon(
+        X, y, 
+        [2, 8, 8, 8, 2], 
+        filename='n_layers_images/3x8_relu.png')
     
     # Experiment 3 - layer size
-    model = DeepNeuralNetwork(
-        layer_dims=[2, 3, 3, 2],
-        actFun_type='relu',
-        reg_lambda=0.01,
-        seed=0
-    )
-    model.fit_model(X, y, epochs=20000, epsilon=0.01, print_loss=True)
-    model.save_decision_boundary(X, y, filename='2x3_relu.png')
+    train_moon(
+        X, y, 
+        [2, 3, 3, 2], 
+        filename='n_layers_images/2x3_relu.png')
+    train_moon(
+        X, y, 
+        [2, 100, 100, 2], 
+        filename='n_layers_images/2x100_relu.png')
     
-    model = DeepNeuralNetwork(
-        layer_dims=[2, 100, 100, 2],
-        actFun_type='relu',
-        reg_lambda=0.01,
-        seed=0
-    )
-    model.fit_model(X, y, epochs=20000, epsilon=0.01, print_loss=True)
-    model.save_decision_boundary(X, y, filename='2x100_relu.png')
+    # Experiment 4 - regularization
+    train_moon(
+        X, y, 
+        [2, 100, 100, 2], 
+        reg_lambda=0.0, 
+        filename='n_layers_images/2x100_relu_no_reg.png')
+    train_moon(
+        X, y, 
+        [2, 100, 100, 2], 
+        reg_lambda=0.5, 
+        filename='n_layers_images/2x100_relu_reg_0.5.png')
+
+    # ##########################################################
+    # Breast cancer dataset
+    # ##########################################################
     
-    # Experiment 4 - reg lambda
-    model = DeepNeuralNetwork(
-        layer_dims=[2, 100, 100, 2],
+    n_features, X_train, X_test, y_train, y_test = generate_cancer_data()
+    
+    # baseline
+    train_cancer(
+        X_train, y_train, X_test, y_test,
+        [n_features, 20, 10, 2],
         actFun_type='relu',
+        name='2x100_relu'
+    )
+    
+    # Experiment 1 - act func
+    train_cancer(
+        X_train, y_train, X_test, y_test,
+        [n_features, 20, 10, 2],
+        actFun_type='tanh',
+        name='2x100_tanh'
+    )
+    train_cancer(
+        X_train, y_train, X_test, y_test,
+        [n_features, 20, 10, 2],
+        actFun_type='sigmoid',
+        name='2x100_sigmoid'
+    )
+    
+    # Experiment 2 - deep / shallow
+    train_cancer(
+        X_train, y_train, X_test, y_test,
+        [n_features, 200, 2],
+        name='1x200_tanh'
+    )
+    train_cancer(
+        X_train, y_train, X_test, y_test,
+        [n_features, 50, 50, 50, 2],
+        name='3x50_tanh'
+    )
+    
+    # Experiment 3 - layer size
+    train_cancer(
+        X_train, y_train, X_test, y_test,
+        [n_features, 10, 10, 2],
+        name='2x10_tanh'
+    )
+    train_cancer(
+        X_train, y_train, X_test, y_test,
+        [n_features, 200, 200, 2],
+        name='2x200_tanh'
+    )
+    
+    # Experiment 4 - regularization
+    train_cancer(
+        X_train, y_train, X_test, y_test,
+        [n_features, 100, 50, 2],
         reg_lambda=0.0,
-        seed=0
+        name='2x100_tanh_no_reg'
     )
-    model.fit_model(X, y, epochs=20000, epsilon=0.01, print_loss=True)
-    model.save_decision_boundary(X, y, filename='2x100_relu_no_reg.png')
-    
-    model = DeepNeuralNetwork(
-        layer_dims=[2, 100, 100, 2],
-        actFun_type='relu',
+    train_cancer(
+        X_train, y_train, X_test, y_test,
+        [n_features, 100, 50, 2],
         reg_lambda=0.5,
-        seed=0
+        name='2x100_tanh_reg_0.5'
     )
-    model.fit_model(X, y, epochs=20000, epsilon=0.01, print_loss=True)
-    model.save_decision_boundary(X, y, filename='2x100_relu_reg_0.5.png')
 
 if __name__ == "__main__":
     main()

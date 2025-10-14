@@ -46,19 +46,21 @@ from pathlib import Path
 batch_size = 64
 test_batch_size = 1000
 epochs = 10
-lr = 0.01
+lr = 0.001
 try_cuda = True
 seed = 1000
 logging_interval = 10 # how many batches to wait before logging
+detailed_logging_interval = 100 # for detailed statistics (weights, biases, activations)
 logging_dir = None
 
 # 1) setting up the logging
-[inset-code: set up logging]
+writer = SummaryWriter(log_dir=logging_dir)
+
 
 #deciding whether to send to the cpu or not if available
 if torch.cuda.is_available() and try_cuda:
     cuda = True
-    torch.cuda.mnaual_seed(seed)
+    torch.cuda.manual_seed(seed)
 else:
     cuda = False
     torch.manual_seed(seed)
@@ -68,62 +70,138 @@ transform=transforms.Compose([
             transforms.ToTensor(),
             transforms.Normalize((0.01307,), (0.3081,))
 ])
-
-train_loader = [inset-code]
-
-test_loader = [inset-code]
+# Data loading
+train_dataset = datasets.MNIST(root='./data', train=True, download=True, transform=transform)
+test_dataset = datasets.MNIST(root='./data', train=False, download=True, transform=transform)
+train_loader = torch.utils.data.DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
+test_loader = torch.utils.data.DataLoader(test_dataset, batch_size=test_batch_size, shuffle=True)
 
 # Defining Architecture,loss and optimizer
 class Net(nn.Module):
     def __init__(self):
 
         super(Net, self).__init__()
-        self.conv1 = [inset-code]
-        self.conv2 = [inset-code]
-        self.conv2_drop = [inset-code]
-        self.fc1 = [inset-code]
-        self.fc2 = [inset-code]
+        # conv1(5-5-1-32)
+        self.conv1 = nn.Conv2d(1, 32, kernel_size=5)
+        # conv2(5-5-32-64)
+        self.conv2 = nn.Conv2d(32, 64, kernel_size=5)
+        # dropout(0.5)
+        self.conv2_drop = nn.Dropout(0.5)
+        # fc(1024)
+        self.fc1 = nn.Linear(1024, 1024)
+        # softmax(10)
+        self.fc2 = nn.Linear(1024, 10)
+        
+        self.activations = {}
 
     def forward(self, x):
 
-        x = [inset-code]
-        x = [inset-code]
-        x = [inset-code]
-        x = [inset-code]
-        x = [inset-code]
-        x = [inset-code]
-        x = F.softmax(x,dim=1)
+        # x -> conv1 -> ReLU -> maxpool(2-2)
+        conv1_out = self.conv1(x)
+        self.activations['conv1_net_input'] = conv1_out.detach()
+        
+        conv1_relu = F.relu(conv1_out)
+        self.activations['conv1_relu'] = conv1_relu.detach()
+        
+        conv1_pool = F.max_pool2d(conv1_relu, 2)
+        self.activations['conv1_maxpool'] = conv1_pool.detach()
+        
+        # x -> conv2 -> ReLU -> maxpool(2-2)
+        conv2_out = self.conv2(conv1_pool)
+        self.activations['conv2_net_input'] = conv2_out.detach()
+        
+        conv2_relu = F.relu(conv2_out)
+        self.activations['conv2_relu'] = conv2_relu.detach()
+        
+        conv2_pool = F.max_pool2d(conv2_relu, 2)
+        self.activations['conv2_maxpool'] = conv2_pool.detach()
+        
+        # flatten
+        x = torch.flatten(conv2_pool, 1)
+        
+        # x -> fc1 -> ReLU -> dropout
+        fc1_out = self.fc1(x)
+        self.activations['fc1_net_input'] = fc1_out.detach()
+        
+        fc1_relu = F.relu(fc1_out)
+        self.activations['fc1_relu'] = fc1_relu.detach()
+        
+        fc1_drop = self.conv2_drop(fc1_relu)
+        
+        # x -> fc2
+        fc2_out = self.fc2(fc1_drop)
+        self.activations['fc2_net_input'] = fc2_out.detach()
+        
+        output = F.softmax(fc2_out, dim=1) # used with NLLLoss
 
-        return x
+        return output
 
-[inset-code: instantiate model]
+model = Net()
+if cuda:
+    model = model.cuda()
 
-optimizer = [inset-code: USE AN ADAM OPTIMIZER]
+optimizer = optim.Adam(model.parameters(), lr=lr)
 
 
 # Defining the test and trainig loops
 eps=1e-13
 
+def log_statistics(tensor, name, n_iter):
+    """Log min, max, mean, std, and histogram for a tensor"""
+    tensor_cpu = tensor.detach().cpu()
+    writer.add_scalar(f'{name}/min', tensor_cpu.min().item(), n_iter)
+    writer.add_scalar(f'{name}/max', tensor_cpu.max().item(), n_iter)
+    writer.add_scalar(f'{name}/mean', tensor_cpu.mean().item(), n_iter)
+    writer.add_scalar(f'{name}/std', tensor_cpu.std().item(), n_iter)
+    writer.add_histogram(name, tensor_cpu.numpy(), n_iter)
+
+def log_detailed_stats(model, n_iter):
+    """Log detailed statistics for weights, biases, and activations"""
+    # Log weights and biases
+    for name, param in model.named_parameters():
+        if 'weight' in name:
+            log_statistics(param, f'weights/{name}', n_iter)
+        elif 'bias' in name:
+            log_statistics(param, f'biases/{name}', n_iter)
+    
+    # Log activations (net inputs, ReLU outputs, maxpool outputs)
+    for act_name, activation in model.activations.items():
+        if 'net_input' in act_name:
+            log_statistics(activation, f'net_inputs/{act_name}', n_iter)
+        elif 'relu' in act_name:
+            log_statistics(activation, f'relu_activations/{act_name}', n_iter)
+        elif 'maxpool' in act_name:
+            log_statistics(activation, f'maxpool_activations/{act_name}', n_iter)
+
 def train(epoch):
     model.train()
 
     #criterion = nn.CrossEntropyLoss()
-    criterion = [inset-code]
+    criterion = nn.NLLLoss()
 
     for batch_idx, (data, target) in enumerate(train_loader):
         if cuda:
             data, target = data.cuda(), target.cuda()
 
-        optimizer.[inset-code]
-        output = [inset-code]
+        optimizer.zero_grad()
+        output = model(data)
         loss = criterion(torch.log(output+eps), target) # = sum_k(-t_k * log(y_k))
-        loss[inset-code]
-        optimizer[inset-code]
+        loss.backward()
+        optimizer.step()
+
+        n_iter = (epoch - 1) * len(train_loader) + batch_idx
 
         if batch_idx % logging_interval == 0:
-            [inset-code: print and log the performance]
+            print(f'Train Epoch: {epoch} [{batch_idx * len(data)}/{len(train_loader.dataset)} ({100. * batch_idx / len(train_loader):.0f}%)]\tLoss: {loss.item():.6f}')
+            writer.add_scalar('train/loss', loss.item(), n_iter)
+        
+        # Log detailed statistics every 100 iterations
+        if n_iter % detailed_logging_interval == 0:
+            print(f'  -> Logging detailed statistics at iteration {n_iter}')
+            log_detailed_stats(model, n_iter)
 
     # Log model parameters to TensorBoard at every epoch
+    n_iter = epoch * len(train_loader)
     for name, param in model.named_parameters():
         layer, attr = os.path.splitext(name)
         attr = attr[1:]
@@ -140,8 +218,8 @@ def test(epoch):
     correct = 0
     #criterion = nn.CrossEntropyLoss()
 
-    #criterion = nn.CrossEntropyLoss(size_average = False)
-    criterion = nn.NLLLoss(size_average = False)
+    #criterion = nn.CrossEntropyLoss(reduction='sum')
+    criterion = nn.NLLLoss(reduction='sum')
 
     for data, target in test_loader:
         if cuda:
@@ -150,20 +228,25 @@ def test(epoch):
         output = model(data)
 
         test_loss += criterion(torch.log(output+eps), target,).item() # sum up batch loss (later, averaged over all test samples)
-        pred = [inset-code] # get the index of the max log-probability
-        correct += [inset-code]
+        pred = output.argmax(dim=1, keepdim=True) # get the index of the max log-probability
+        correct += pred.eq(target.view_as(pred)).sum().item()
 
     test_loss /= len(test_loader.dataset)
     test_accuracy = 100. * correct / len(test_loader.dataset)
-    [inset-code: print the performance]
+    test_error = 100.0 - test_accuracy
+    print(f'\nTest set: Average loss: {test_loss:.4f}, Accuracy: {correct}/{len(test_loader.dataset)} ({test_accuracy:.2f}%), Error: {test_error:.2f}%\n')
 
-    # Log test/loss and test/accuracy to TensorBoard at every epoch
+    # Log test/loss, test/accuracy, and test/error_rate to TensorBoard at every epoch
     n_iter = epoch * len(train_loader)
-    [inset-code: log the performance]
+    writer.add_scalar('test/loss', test_loss, n_iter)
+    writer.add_scalar('test/accuracy', test_accuracy, n_iter)
+    writer.add_scalar('test/error_rate', test_error, n_iter)
 
 # Training loop
 
-[inset-code: running test and training over epoch]
+for epoch in range(1, epochs + 1):
+    train(epoch)
+    test(epoch)
 
 writer.close()
 
