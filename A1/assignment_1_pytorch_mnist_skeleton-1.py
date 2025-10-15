@@ -47,6 +47,8 @@ batch_size = 64
 test_batch_size = 1000
 epochs = 10
 lr = 0.001
+lrSGD = 0.1
+momentumSGD = 0.9
 try_cuda = True
 seed = 1000
 logging_interval = 10 # how many batches to wait before logging
@@ -78,8 +80,11 @@ test_loader = torch.utils.data.DataLoader(test_dataset, batch_size=test_batch_si
 
 # Defining Architecture,loss and optimizer
 class Net(nn.Module):
-    def __init__(self):
-
+    def __init__(self, activation='relu'):
+        """
+        Args:
+            activation: 'relu' or 'tanh' - activation function to use
+        """
         super(Net, self).__init__()
         # conv1(5-5-1-32)
         self.conv1 = nn.Conv2d(1, 32, kernel_size=5)
@@ -92,6 +97,13 @@ class Net(nn.Module):
         # softmax(10)
         self.fc2 = nn.Linear(1024, 10)
         
+        # Activation function experiment
+        self.activation_type = activation
+        if activation == 'relu':
+            self.activation_fn = F.relu
+        elif activation == 'tanh':
+            self.activation_fn = F.tanh
+                
         self.activations = {}
 
     def forward(self, x):
@@ -100,20 +112,20 @@ class Net(nn.Module):
         conv1_out = self.conv1(x)
         self.activations['conv1_net_input'] = conv1_out.detach()
         
-        conv1_relu = F.relu(conv1_out)
-        self.activations['conv1_relu'] = conv1_relu.detach()
+        conv1_act = self.activation_fn(conv1_out)
+        self.activations[f'conv1_{self.activation_type}'] = conv1_act.detach()
         
-        conv1_pool = F.max_pool2d(conv1_relu, 2)
+        conv1_pool = F.max_pool2d(conv1_act, 2)
         self.activations['conv1_maxpool'] = conv1_pool.detach()
         
         # x -> conv2 -> ReLU -> maxpool(2-2)
         conv2_out = self.conv2(conv1_pool)
         self.activations['conv2_net_input'] = conv2_out.detach()
         
-        conv2_relu = F.relu(conv2_out)
-        self.activations['conv2_relu'] = conv2_relu.detach()
+        conv2_act = self.activation_fn(conv2_out)
+        self.activations[f'conv2_{self.activation_type}'] = conv2_act.detach()
         
-        conv2_pool = F.max_pool2d(conv2_relu, 2)
+        conv2_pool = F.max_pool2d(conv2_act, 2)
         self.activations['conv2_maxpool'] = conv2_pool.detach()
         
         # flatten
@@ -123,10 +135,10 @@ class Net(nn.Module):
         fc1_out = self.fc1(x)
         self.activations['fc1_net_input'] = fc1_out.detach()
         
-        fc1_relu = F.relu(fc1_out)
-        self.activations['fc1_relu'] = fc1_relu.detach()
+        fc1_act = self.activation_fn(fc1_out)
+        self.activations[f'fc1_{self.activation_type}'] = fc1_act.detach()
         
-        fc1_drop = self.conv2_drop(fc1_relu)
+        fc1_drop = self.conv2_drop(fc1_act)
         
         # x -> fc2
         fc2_out = self.fc2(fc1_drop)
@@ -136,11 +148,15 @@ class Net(nn.Module):
 
         return output
 
-model = Net()
+# activation function experiment: 'relu' or 'tanh'
+activation_function = 'tanh'
+
+model = Net(activation=activation_function)
 if cuda:
     model = model.cuda()
 
 optimizer = optim.Adam(model.parameters(), lr=lr)
+# optimizer = optim.SGD(model.parameters(), lr=lrSGD, momentum=momentumSGD)
 
 
 # Defining the test and trainig loops
@@ -168,8 +184,8 @@ def log_detailed_stats(model, n_iter):
     for act_name, activation in model.activations.items():
         if 'net_input' in act_name:
             log_statistics(activation, f'net_inputs/{act_name}', n_iter)
-        elif 'relu' in act_name:
-            log_statistics(activation, f'relu_activations/{act_name}', n_iter)
+        elif 'relu' in act_name or 'tanh' in act_name:
+            log_statistics(activation, f'activations/{act_name}', n_iter)
         elif 'maxpool' in act_name:
             log_statistics(activation, f'maxpool_activations/{act_name}', n_iter)
 
@@ -197,7 +213,6 @@ def train(epoch):
         
         # Log detailed statistics every 100 iterations
         if n_iter % detailed_logging_interval == 0:
-            print(f'  -> Logging detailed statistics at iteration {n_iter}')
             log_detailed_stats(model, n_iter)
 
     # Log model parameters to TensorBoard at every epoch
